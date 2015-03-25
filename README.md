@@ -10,12 +10,12 @@ Please do NOT run if your PC is a 32-bit.
 
 
 
-To load the 'bruteforce' module:
+To load the 'rootkit' module:
 --------------------------------
 
 # make -f Makefile
 
-# sudo insmod bruteforce.ko
+# sudo insmod rootkit.ko
 
 # dmseg | tail
 
@@ -24,6 +24,6 @@ To load the 'bruteforce' module:
 To remove the module:
 ---------------------
 
-# sudo rmmod bruteforce
+# sudo rmmod rootkit
 
 ----------------------------------------------------------------------
