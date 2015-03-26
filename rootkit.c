@@ -64,13 +64,17 @@ static void exit_(void) {
     return;
 }
 
-void enable_write_protection(void) {
-    write_cr0 (read_cr0 () | 0x10000);
+void disable_write_protection(void) {
+
+    write_cr0 (read_cr0 () & (~ 0x10000));
+
     return;
 }
 
-void disable_write_protection(void) {
-    write_cr0 (read_cr0 () & (~ 0x10000));
+void enable_write_protection(void) {
+
+    write_cr0 (read_cr0 () | 0x10000);
+
     return;
 }
 
