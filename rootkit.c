@@ -41,8 +41,6 @@ static int init(void) {
 
     printk("\nModule starting...\n");
 
-    write_cr0 (read_cr0 () & (~ 0x10000)); // Disabling protection
-
     syscall_table = (unsigned long long *) find();
 
     if ( syscall_table != NULL ) {
@@ -61,10 +59,18 @@ static int init(void) {
 
 static void exit_(void) {
 
-    write_cr0 (read_cr0 () | 0x10000); //Enabling protection
-
     printk("Module ending\n");
 
+    return;
+}
+
+void enable_write_protection(void) {
+    write_cr0 (read_cr0 () | 0x10000);
+    return;
+}
+
+void disable_write_protection(void) {
+    write_cr0 (read_cr0 () & (~ 0x10000));
     return;
 }
 
