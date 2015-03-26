@@ -19,63 +19,62 @@ unsigned long long *syscall_table;
 
 unsigned long long **find(void) {
 
-    unsigned long long **sctable;
-    unsigned long int i = START_MEM;
+  unsigned long long **sctable;
+  unsigned long int i = START_MEM;
 
-    while ( i < END_MEM) {
+  while ( i < END_MEM) {
 
-        sctable = (unsigned long long **)i;
+    sctable = (unsigned long long **)i;
 
-        if ( sctable[__NR_close] == (unsigned long long *) sys_close) {
+    if ( sctable[__NR_close] == (unsigned long long *) sys_close) {
 
-            return &sctable[0];
-        }
-
-        i += sizeof(void *);
+      return &sctable[0];
     }
 
-    return NULL;
+    i += sizeof(void *);
+  }
+
+  return NULL;
 }
 
 static int init(void) {
 
-    printk("\nModule starting...\n");
+  printk("\nModule starting...\n");
 
-    syscall_table = (unsigned long long *) find();
+  syscall_table = (unsigned long long *) find();
 
-    if ( syscall_table != NULL ) {
+  if ( syscall_table != NULL ) {
 
-        printk("Syscall table found at %llx\n", (unsigned long long ) syscall_table);
+    printk("Syscall table found at %llx\n", (unsigned long long ) syscall_table);
 
 
-    } else {
+  } else {
 
-        printk("Syscall table not found!\n");
+    printk("Syscall table not found!\n");
 
-    }   
+  }   
 
-    return 0;
+  return 0;
 }
 
 static void exit_(void) {
+  printk("Module ending\n");
 
-    printk("Module ending\n");
-
-    return;
+  return;
 }
 
 void disable_write_protection(void) {
 
-    write_cr0 (read_cr0 () & (~ 0x10000));
+  write_cr0 (read_cr0 () & (~ 0x10000));
 
-    return;
+  return;
 }
 
 void enable_write_protection(void) {
 
-    write_cr0 (read_cr0 () | 0x10000);
+  write_cr0 (read_cr0 () | 0x10000);
 
-    return;
+  return;
 }
 
 module_init(init);
