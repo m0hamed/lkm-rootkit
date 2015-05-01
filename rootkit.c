@@ -260,11 +260,11 @@ void hijack_write_syscall(void) {
   disable_write_protection();
 
   original_write = (void *)syscall_table[__NR_write];
-  printk("\n before write hijacking: %d\n", original_write);
+  printk("\n before write hijacking: %llx\n", (unsigned long long) original_write);
 
-  syscall_table[__NR_write] = new_write; 
+  syscall_table[__NR_write] = (unsigned long long) new_write; 
   modified_write = (void *)syscall_table[__NR_write];
-  printk("\n after write hijacking %d\n", modified_write);
+  printk("\n after write hijacking %llx\n", (unsigned long long) modified_write);
 
   enable_write_protection();
 }
@@ -273,7 +273,7 @@ void hijack_write_syscall(void) {
 void restore_hijacked_write_syscall(void) {
 
   disable_write_protection();
-  syscall_table[__NR_write] = original_write; 
+  syscall_table[__NR_write] = (unsigned long long) original_write; 
   enable_write_protection(); 
   printk("\nHijacked write Syscall is Restored\n");
 
