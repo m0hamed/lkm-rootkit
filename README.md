@@ -12,7 +12,7 @@ To load the 'rootkit' module:
 --------------------------------
     make -f Makefile
     sudo insmod rootkit.ko
-    dmseg | tail
+    dmesg | tail
 
 
 
