@@ -1,3 +1,5 @@
+NOTICE:This kernel module is only compatible with 64-bit PCs. Please do NOT run if your PC is a 32-bit.
+
 To compile the module:
 make -f Makefile
 
