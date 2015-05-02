@@ -20,4 +20,9 @@ To remove the module:
 ---------------------
     sudo rmmod rootkit
 
-----------------------------------------------------------------------
+To be able to get root access:
+------------------------------
+	After loading the module, Invoke the write function with the last 
+	parameter (the count) passed as -1
+
+-----------------------------------------------------------------------------
